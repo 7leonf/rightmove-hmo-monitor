@@ -96,13 +96,4 @@ def scrape_rightmove_page(url):
                 link_elem = card.find('a', class_='propertyCard-link') or card.find('a', href=True)
                 if not link_elem: continue
                 
-                href = link_elem.get('href', '')
-                id_match = re.search(r'properties/(\d+)', href)
-                prop_id = id_match.group(1) if id_match else card.get('id', '').replace('property-', '')
-                
-                if not prop_id: continue
-                
-                title_elem = card.find('address', class_='propertyCard-address')
-                title = title_elem.get_text(strip=True) if title_elem else ""
-                
-                price_elem
+                href =
