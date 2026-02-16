@@ -1,10 +1,8 @@
 """
-HMO Investment Opportunity Finder - Web Scraping Version
-Updated 2026: Fixed syntax and updated selectors for modern Rightmove layout.
+HMO Investment Opportunity Finder - Professional Web Scraper
+Updated 2026: Uses curl_cffi for TLS impersonation and JSON model extraction.
 """
 
-import requests
-from bs4 import BeautifulSoup
 import json
 import openpyxl
 from datetime import datetime
@@ -12,13 +10,16 @@ import re
 import os
 from collections import defaultdict
 import time
+import random
+# Using curl_cffi to bypass TLS fingerprinting blocks on GitHub Actions
+from curl_cffi import requests
 
 # Configuration
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
 EXCEL_FILE = 'Masterkey.xlsx'
 
-# Search URLs for Brighton & Hove (no price filter, sorted by newest)
+# Search URLs for Brighton & Hove
 SEARCH_URLS = [
     "https://www.rightmove.co.uk/property-for-sale/find.html?locationIdentifier=REGION%5E1169&minBedrooms=3&radius=3.0&sortType=6&index=0",
     "https://www.rightmove.co.uk/property-for-sale/find.html?locationIdentifier=REGION%5E1169&minBedrooms=4&radius=3.0&sortType=6&index=0",
@@ -30,232 +31,135 @@ def load_landlord_database():
     try:
         wb = openpyxl.load_workbook(EXCEL_FILE)
         ws = wb['Sheet1']
-        
-        landlords = defaultdict(lambda: {
-            'name': '',
-            'properties': [],
-            'wards': set(),
-            'total_bedrooms': 0,
-            'property_count': 0,
-            'agent': ''
-        })
+        landlords = defaultdict(lambda: {'name': '', 'properties': [], 'wards': set(), 'property_count': 0, 'agent': ''})
         
         for row in ws.iter_rows(min_row=2, values_only=True):
-            applicant_name = row[6]
-            property_address = row[3]
-            ward = row[4]
-            bedrooms = row[14]
-            agent = row[8]
-            
-            if applicant_name:
-                landlord = landlords[applicant_name]
-                landlord['name'] = applicant_name
-                landlord['properties'].append(property_address)
-                landlord['wards'].add(ward)
-                landlord['property_count'] += 1
-                if bedrooms:
-                    landlord['total_bedrooms'] += bedrooms
-                if agent and not landlord['agent']:
-                    landlord['agent'] = agent
+            name, addr, ward, beds, agent = row[6], row[3], row[4], row[14], row[8]
+            if name:
+                l = landlords[name]
+                l['name'], l['agent'] = name, agent or l['agent']
+                l['properties'].append(addr)
+                l['wards'].add(ward)
+                l['property_count'] += 1
         
-        wb.close()
-        for landlord in landlords.values():
-            landlord['wards'] = list(landlord['wards'])
+        for l in landlords.values(): l['wards'] = list(l['wards'])
         return dict(landlords)
     except Exception as e:
-        print(f"❌ Error loading Excel: {e}")
+        print(f"❌ Excel Load Error: {e}")
         return {}
 
 def scrape_rightmove_page(url):
-    """Scrape property listings using updated 2026 selectors"""
+    """Bypasses blocks by extracting Rightmove's internal window.jsonModel"""
     properties = []
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-        'Accept-Language': 'en-GB,en;q=0.9',
-        'Referer': 'https://www.rightmove.co.uk/property-for-sale/find.html',
-        'Connection': 'keep-alive'
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-GB,en;q=0.9",
+        "Referer": "https://www.rightmove.co.uk/"
     }
     
     try:
-        response = requests.get(url, headers=headers, timeout=15)
-        if response.status_code != 200:
-            print(f"   ⚠️  HTTP {response.status_code} for URL")
+        # Impersonate Chrome to bypass TLS fingerprinting
+        resp = requests.get(url, headers=headers, impersonate="chrome", timeout=20)
+        if resp.status_code != 200:
+            print(f"   ⚠️ Blocked: HTTP {resp.status_code}")
             return properties
+
+        # Rightmove stores all results in a single JSON variable in the source code
+        json_pattern = r"window\.jsonModel\s*=\s*(\{.*?\})\s*</script>"
+        match = re.search(json_pattern, resp.text)
         
-        soup = BeautifulSoup(response.text, 'html.parser')
-        property_cards = soup.find_all('div', class_='l-searchResult')
-        
-        if not property_cards:
-            property_cards = soup.find_all('div', attrs={'data-test': re.compile(r'propertyCard-\d+')})
-        
-        print(f"   Found {len(property_cards)} property cards")
-        
-        for card in property_cards:
-            try:
-                link_elem = card.find('a', class_='propertyCard-link') or card.find('a', href=True)
-                if not link_elem: continue
-                
-                href = link_elem.get('href', '')
-                id_match = re.search(r'properties/(\d+)', href)
-                prop_id = id_match.group(1) if id_match else card.get('id', '').replace('property-', '')
-                
-                if not prop_id: continue
-                
-                title_elem = card.find('address', class_='propertyCard-address')
-                title = title_elem.get_text(strip=True) if title_elem else ""
-                
-                price_elem = card.find('div', class_='propertyCard-priceValue') or card.find('span', attrs={'data-test': 'property-price'})
-                price = price_elem.get_text(strip=True) if price_elem else 'POA'
-                
-                desc_elem = card.find('span', attrs={'data-test': 'property-description'})
-                description = desc_elem.get_text(strip=True) if desc_elem else ''
-                
-                bedrooms = 0
-                bed_match = re.search(r'(\d+)\s+bed', card.get_text(), re.IGNORECASE)
-                if bed_match:
-                    bedrooms = int(bed_match.group(1))
-                
+        if match:
+            data = json.loads(match.group(1))
+            listings = data.get('properties', [])
+            print(f"   ✅ Extracted {len(listings)} listings from JSON model")
+            
+            for p in listings:
                 properties.append({
-                    'id': prop_id,
-                    'title': title,
-                    'price': price,
-                    'description': description,
-                    'link': f"https://www.rightmove.co.uk/properties/{prop_id}",
-                    'bedrooms': bedrooms
+                    'id': str(p.get('id')),
+                    'title': p.get('displayAddress', 'No Address'),
+                    'price': p.get('price', {}).get('displayPrices', [{}])[0].get('displayPrice', 'POA'),
+                    'description': p.get('summary', ''),
+                    'link': f"https://www.rightmove.co.uk{p.get('propertyUrl')}",
+                    'bedrooms': p.get('bedrooms', 0)
                 })
-            except Exception:
-                continue
+        else:
+            print("   ⚠️ No JSON data found in page source.")
     except Exception as e:
-        print(f"   ❌ Error: {e}")
+        print(f"   ❌ Scraping Error: {e}")
     return properties
 
-def extract_postcode(address):
-    postcode_pattern = r'BN\d+\s*\d+[A-Z]{2}'
-    match = re.search(postcode_pattern, address, re.IGNORECASE)
-    return match.group(0).upper() if match else None
-
-def get_ward_from_postcode(postcode):
-    if not postcode: return []
-    ward_map = {
-        'BN1': ['West Hill & North Laine', 'Regency', 'Queens Park'],
-        'BN2': ['Hanover & Elm Grove', 'Kemptown', 'Queens Park', 'Moulsecoomb & Bevendean'],
-        'BN3': ['Brunswick & Adelaide', 'Goldsmid', 'Central Hove', 'Wish'],
-        'BN41': ['Portslade'],
-        'BN42': ['Southwick'],
-    }
-    return ward_map.get(postcode[:3], [])
-
-def assess_hmo_potential(property_data):
-    description = property_data.get('description', '').lower()
-    title = property_data.get('title', '').lower()
-    bedrooms = property_data.get('bedrooms', 0)
+def assess_hmo_potential(prop):
+    """Calculates HMO suitability score"""
+    desc, title, beds = prop['description'].lower(), prop['title'].lower(), prop['bedrooms']
     score = 0
     reasons = []
     
-    if bedrooms >= 5:
-        score += 30
-        reasons.append(f"{bedrooms} bedrooms")
-    elif bedrooms >= 3:
-        score += 20
-        reasons.append(f"{bedrooms} bedrooms")
+    if beds >= 5: score += 35; reasons.append(f"{beds} beds")
+    elif beds >= 3: score += 20; reasons.append(f"{beds} beds")
     
-    hmo_keywords = {'student': 10, 'sharers': 15, 'hmo': 30, 'investment': 10}
-    for kw, pts in hmo_keywords.items():
-        if kw in description or kw in title:
+    keywords = {'student': 15, 'sharers': 15, 'hmo': 30, 'investment': 10, 'ensuite': 10}
+    for kw, pts in keywords.items():
+        if kw in desc or kw in title:
             score += pts
-            reasons.append(f"Mentions '{kw}'")
+            reasons.append(f"Found '{kw}'")
     return score, reasons
 
-def extract_epc_rating(property_data):
-    epc_pattern = r'EPC\s+(?:rating\s+)?([A-G])'
-    match = re.search(epc_pattern, property_data.get('description', ''), re.IGNORECASE)
-    return match.group(1).upper() if match else None
-
-def is_low_epc(epc_rating):
-    return epc_rating in ['D', 'E', 'F', 'G']
-
-def find_matching_landlords(property_data, landlords):
+def find_matching_landlords(prop, landlords):
+    """Matches properties to existing landlord portfolios"""
     matches = []
-    postcode = extract_postcode(property_data.get('title', ''))
-    wards = get_ward_from_postcode(postcode)
-    
     for name, info in landlords.items():
-        score = 0
+        m_score = 0
         reasons = []
-        for ward in wards:
-            if ward in info['wards']:
-                score += 30
-                reasons.append(f"Owns in {ward}")
+        # Basic postcode/ward matching logic (can be expanded)
+        if any(w in prop['title'] for w in info['wards']):
+            m_score += 40; reasons.append("Existing portfolio area")
         if info['property_count'] >= 3:
-            score += 20
-        if score >= 20:
-            matches.append({
-                'landlord': name, 
-                'score': score, 
-                'reasons': reasons, 
-                'portfolio_size': info['property_count'], 
-                'agent': info['agent']
-            })
+            m_score += 20; reasons.append(f"Active ({info['property_count']} units)")
+            
+        if m_score >= 30:
+            matches.append({'landlord': name, 'score': m_score, 'reasons': reasons, 'portfolio_size': info['property_count'], 'agent': info['agent']})
+    
     matches.sort(key=lambda x: x['score'], reverse=True)
     return matches[:5]
 
-def send_telegram_alert(message):
+def send_telegram_alert(msg):
+    """Sends the formatted alert to Telegram"""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: return False
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    data = {'chat_id': TELEGRAM_CHAT_ID, 'text': message, 'parse_mode': 'HTML'}
+    payload = {'chat_id': TELEGRAM_CHAT_ID, 'text': msg, 'parse_mode': 'HTML'}
     try:
-        return requests.post(url, data=data, timeout=10).status_code == 200
-    except:
-        return False
-
-def format_opportunity_alert(prop, hmo_score, hmo_reasons, epc, matches):
-    msg = f"🏠 <b>INVESTMENT FOUND!</b>\n\n📍 {prop['title']}\n💰 {prop['price']}\n🔗 <a href='{prop['link']}'>View</a>\n"
-    if epc: msg += f"⚡ EPC: {epc}\n"
-    if hmo_score > 0:
-        msg += f"\n🏘️ <b>HMO Score: {hmo_score}</b>\n"
-        for r in hmo_reasons[:2]: msg += f" • {r}\n"
-    if matches:
-        msg += f"\n👥 <b>Potential Buyers:</b>\n"
-        for m in matches[:2]: msg += f"<b>{m['landlord']}</b> (Match: {m['score']}%)\n"
-    return msg
-
-def load_seen_properties():
-    try:
-        with open('seen_properties.json', 'r') as f: return set(json.load(f))
-    except: return set()
-
-def save_seen_properties(seen_ids):
-    with open('seen_properties.json', 'w') as f: json.dump(list(seen_ids), f)
+        return requests.post(url, data=payload, timeout=10).status_code == 200
+    except: return False
 
 def main():
-    print(f"🔍 Starting Finder at {datetime.now()}")
+    print(f"🔍 Starting Finder: {datetime.now()}")
     landlords = load_landlord_database()
-    seen = load_seen_properties()
+    
+    try:
+        with open('seen_properties.json', 'r') as f: seen = set(json.load(f))
+    except: seen = set()
+    
     all_props = []
-    
     for url in SEARCH_URLS:
-        print(f"📡 Scraping: {url[:60]}...")
         all_props.extend(scrape_rightmove_page(url))
-        time.sleep(2)
+        # Be stealthy: use random delays
+        time.sleep(random.uniform(5, 10))
     
-    new_found = 0
+    new_count = 0
     for prop in all_props:
-        p_id = prop.get('id')
-        if not p_id or p_id in seen: continue
+        if prop['id'] in seen: continue
         
-        score, reasons = assess_hmo_potential(prop)
-        epc = extract_epc_rating(prop)
-        
-        if is_low_epc(epc) or score >= 25:
+        h_score, h_reasons = assess_hmo_potential(prop)
+        if h_score >= 25:
             matches = find_matching_landlords(prop, landlords)
             if matches:
-                if send_telegram_alert(format_opportunity_alert(prop, score, reasons, epc, matches)):
-                    new_found += 1
-        seen.add(p_id)
+                alert = f"🏠 <b>HMO OPPORTUNITY</b>\n\n📍 {prop['title']}\n💰 {prop['price']}\n🛏️ {prop['bedrooms']} Beds\n🔗 <a href='{prop['link']}'>View</a>\n\n<b>Match:</b> {matches[0]['landlord']}"
+                if send_telegram_alert(alert): new_count += 1
+        seen.add(prop['id'])
     
-    save_seen_properties(seen)
-    print(f"✨ Complete! New opportunities found: {new_found}")
+    with open('seen_properties.json', 'w') as f: json.dump(list(seen), f)
+    print(f"✨ Found {new_count} new opportunities.")
 
 if __name__ == "__main__":
     main()
