@@ -1,4 +1,4 @@
-name: Rightmove HMO Monitor
+name: HMO Investment Opportunity Finder
 
 on:
   schedule:
@@ -7,7 +7,7 @@ on:
   workflow_dispatch:  # Allow manual trigger
 
 jobs:
-  monitor:
+  find_opportunities:
     runs-on: ubuntu-latest
     
     steps:
@@ -32,16 +32,16 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
     
-    - name: Run monitoring script
+    - name: Run investment finder
       env:
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       run: |
-        python rightmove_rss_monitor.py
+        python hmo_investment_finder.py
     
     - name: Commit and push if changes
       run: |
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
         git add seen_properties.json
-        git diff --quiet && git diff --staged --quiet || (git commit -m "Update seen properties" && git push)
+        git diff --quiet && git diff --staged --quiet || (git commit -m "Update seen properties" && git push) || true
