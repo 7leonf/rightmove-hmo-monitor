@@ -1,6 +1,6 @@
 """
 HMO Investment Opportunity Finder - Web Scraping Version
-Updated 2026: Direct scraping with modern selectors and bot protection bypass.
+Updated 2026: Fixed syntax and updated selectors for modern Rightmove layout.
 """
 
 import requests
@@ -41,11 +41,11 @@ def load_landlord_database():
         })
         
         for row in ws.iter_rows(min_row=2, values_only=True):
-            applicant_name = row[6]  # Applicant Name
-            property_address = row[3]  # Property Address
-            ward = row[4]  # Ward Name
-            bedrooms = row[14]  # Bedrooms
-            agent = row[8]  # Agent Name
+            applicant_name = row[6]
+            property_address = row[3]
+            ward = row[4]
+            bedrooms = row[14]
+            agent = row[8]
             
             if applicant_name:
                 landlord = landlords[applicant_name]
@@ -84,6 +84,8 @@ def scrape_rightmove_page(url):
             return properties
         
         soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # Look for the new 'l-searchResult' class used by Rightmove
         property_cards = soup.find_all('div', class_='l-searchResult')
         
         if not property_cards:
@@ -96,4 +98,17 @@ def scrape_rightmove_page(url):
                 link_elem = card.find('a', class_='propertyCard-link') or card.find('a', href=True)
                 if not link_elem: continue
                 
-                href =
+                href = link_elem.get('href', '')
+                id_match = re.search(r'properties/(\d+)', href)
+                prop_id = id_match.group(1) if id_match else card.get('id', '').replace('property-', '')
+                
+                if not prop_id: continue
+                
+                title_elem = card.find('address', class_='propertyCard-address')
+                title = title_elem.get_text(strip=True) if title_elem else ""
+                
+                price_elem = card.find('div', class_='propertyCard-priceValue') or card.find('span', attrs={'data-test': 'property-price'})
+                price = price_elem.get_text(strip=True) if price_elem else 'POA'
+                
+                desc_elem = card.find('span', attrs={'data-test': 'property-description'})
+                description
