@@ -1,5 +1,5 @@
 """
-HMO Investment Opportunity Finder - Professional Web Scraper
+HMO Investment Opportunity Finder - Professional Scraper
 Updated 2026: Uses curl_cffi for TLS impersonation and JSON model extraction.
 """
 
@@ -34,7 +34,7 @@ def load_landlord_database():
         landlords = defaultdict(lambda: {'name': '', 'properties': [], 'wards': set(), 'property_count': 0, 'agent': ''})
         
         for row in ws.iter_rows(min_row=2, values_only=True):
-            # Applicant Name (Col 6), Property Address (Col 3), Ward (Col 4), Agent (Col 8)
+            # Mapping based on your file structure: Applicant Name (Col 6), Property Address (Col 3), Ward (Col 4), Agent (Col 8)
             name, addr, ward, agent = row[6], row[3], row[4], row[8]
             if name:
                 l = landlords[name]
@@ -85,13 +85,13 @@ def scrape_rightmove_page(url):
                     'bedrooms': p.get('bedrooms', 0)
                 })
         else:
-            print("   ⚠️ No JSON data found. Rightmove may be blocking your IP.")
+            print("   ⚠️ No JSON data found. Rightmove may be blocking the request.")
     except Exception as e:
         print(f"   ❌ Scraping Error: {e}")
     return properties
 
 def assess_hmo_potential(prop):
-    """Calculates HMO suitability score based on bedrooms and keywords"""
+    """Calculates HMO suitability score"""
     desc, title, beds = prop['description'].lower(), prop['title'].lower(), prop['bedrooms']
     score = 0
     reasons = []
@@ -112,7 +112,6 @@ def find_matching_landlords(prop, landlords):
     for name, info in landlords.items():
         m_score = 0
         reasons = []
-        # Match if property is in a ward where the landlord already owns
         if any(w.lower() in prop['title'].lower() for w in info['wards'] if w):
             m_score += 40; reasons.append("Existing portfolio area")
         if info['property_count'] >= 3:
@@ -125,7 +124,7 @@ def find_matching_landlords(prop, landlords):
     return matches[:5]
 
 def send_telegram_alert(msg):
-    """Sends formatted alert to Telegram"""
+    """Sends alert to Telegram"""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: return False
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {'chat_id': TELEGRAM_CHAT_ID, 'text': msg, 'parse_mode': 'HTML'}
@@ -137,7 +136,6 @@ def main():
     print(f"🔍 Starting Finder: {datetime.now()}")
     landlords = load_landlord_database()
     
-    # Load previously seen property IDs
     try:
         with open('seen_properties.json', 'r') as f: seen = set(json.load(f))
     except: seen = set()
@@ -146,8 +144,8 @@ def main():
     for url in SEARCH_URLS:
         print(f"📡 Scraping: {url[:60]}...")
         all_props.extend(scrape_rightmove_page(url))
-        # Use random delays to mimic human behavior
-        time.sleep(random.uniform(6, 12))
+        # Random jitter to avoid bot detection
+        time.sleep(random.uniform(7, 14))
     
     new_count = 0
     for prop in all_props:
@@ -162,7 +160,7 @@ def main():
         seen.add(prop['id'])
     
     with open('seen_properties.json', 'w') as f: json.dump(list(seen), f)
-    print(f"✨ Complete. New opportunities found: {new_count}")
+    print(f"✨ Complete. New found: {new_count}")
 
 if __name__ == "__main__":
     main()
