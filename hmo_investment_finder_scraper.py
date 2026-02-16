@@ -1,5 +1,5 @@
 """
-HMO Investment Opportunity Finder - Professional Scraper
+HMO Investment Opportunity Finder - Professional Web Scraper
 Updated 2026: Uses curl_cffi for TLS impersonation and JSON model extraction.
 """
 
@@ -34,7 +34,7 @@ def load_landlord_database():
         landlords = defaultdict(lambda: {'name': '', 'properties': [], 'wards': set(), 'property_count': 0, 'agent': ''})
         
         for row in ws.iter_rows(min_row=2, values_only=True):
-            # Mapping based on your file structure: Applicant Name (Col 6), Property Address (Col 3), Ward (Col 4), Agent (Col 8)
+            # Mapping: Applicant Name (Col 6), Property Address (Col 3), Ward (Col 4), Agent (Col 8)
             name, addr, ward, agent = row[6], row[3], row[4], row[8]
             if name:
                 l = landlords[name]
@@ -61,7 +61,7 @@ def scrape_rightmove_page(url):
     
     try:
         # Impersonate Chrome to bypass TLS fingerprinting
-        resp = requests.get(url, headers=headers, impersonate="chrome", timeout=25)
+        resp = requests.get(url, headers=headers, impersonate="chrome120", timeout=25)
         if resp.status_code != 200:
             print(f"   ⚠️ Blocked: HTTP {resp.status_code}")
             return properties
@@ -144,7 +144,7 @@ def main():
     for url in SEARCH_URLS:
         print(f"📡 Scraping: {url[:60]}...")
         all_props.extend(scrape_rightmove_page(url))
-        # Random jitter to avoid bot detection
+        # Random delay to avoid bot detection
         time.sleep(random.uniform(7, 14))
     
     new_count = 0
