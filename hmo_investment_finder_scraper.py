@@ -34,7 +34,8 @@ def load_landlord_database():
         landlords = defaultdict(lambda: {'name': '', 'properties': [], 'wards': set(), 'property_count': 0, 'agent': ''})
         
         for row in ws.iter_rows(min_row=2, values_only=True):
-            name, addr, ward, beds, agent = row[6], row[3], row[4], row[14], row[8]
+            # Applicant Name (Col 6), Property Address (Col 3), Ward (Col 4), Agent (Col 8)
+            name, addr, ward, agent = row[6], row[3], row[4], row[8]
             if name:
                 l = landlords[name]
                 l['name'], l['agent'] = name, agent or l['agent']
@@ -52,7 +53,7 @@ def scrape_rightmove_page(url):
     """Bypasses blocks by extracting Rightmove's internal window.jsonModel"""
     properties = []
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language": "en-GB,en;q=0.9",
         "Referer": "https://www.rightmove.co.uk/"
@@ -60,12 +61,12 @@ def scrape_rightmove_page(url):
     
     try:
         # Impersonate Chrome to bypass TLS fingerprinting
-        resp = requests.get(url, headers=headers, impersonate="chrome", timeout=20)
+        resp = requests.get(url, headers=headers, impersonate="chrome", timeout=25)
         if resp.status_code != 200:
             print(f"   ⚠️ Blocked: HTTP {resp.status_code}")
             return properties
 
-        # Rightmove stores all results in a single JSON variable in the source code
+        # Extract the JSON variable that powers the Rightmove React app
         json_pattern = r"window\.jsonModel\s*=\s*(\{.*?\})\s*</script>"
         match = re.search(json_pattern, resp.text)
         
@@ -84,13 +85,13 @@ def scrape_rightmove_page(url):
                     'bedrooms': p.get('bedrooms', 0)
                 })
         else:
-            print("   ⚠️ No JSON data found in page source.")
+            print("   ⚠️ No JSON data found. Rightmove may be blocking your IP.")
     except Exception as e:
         print(f"   ❌ Scraping Error: {e}")
     return properties
 
 def assess_hmo_potential(prop):
-    """Calculates HMO suitability score"""
+    """Calculates HMO suitability score based on bedrooms and keywords"""
     desc, title, beds = prop['description'].lower(), prop['title'].lower(), prop['bedrooms']
     score = 0
     reasons = []
@@ -111,8 +112,8 @@ def find_matching_landlords(prop, landlords):
     for name, info in landlords.items():
         m_score = 0
         reasons = []
-        # Basic postcode/ward matching logic (can be expanded)
-        if any(w in prop['title'] for w in info['wards']):
+        # Match if property is in a ward where the landlord already owns
+        if any(w.lower() in prop['title'].lower() for w in info['wards'] if w):
             m_score += 40; reasons.append("Existing portfolio area")
         if info['property_count'] >= 3:
             m_score += 20; reasons.append(f"Active ({info['property_count']} units)")
@@ -124,7 +125,7 @@ def find_matching_landlords(prop, landlords):
     return matches[:5]
 
 def send_telegram_alert(msg):
-    """Sends the formatted alert to Telegram"""
+    """Sends formatted alert to Telegram"""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: return False
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {'chat_id': TELEGRAM_CHAT_ID, 'text': msg, 'parse_mode': 'HTML'}
@@ -136,15 +137,17 @@ def main():
     print(f"🔍 Starting Finder: {datetime.now()}")
     landlords = load_landlord_database()
     
+    # Load previously seen property IDs
     try:
         with open('seen_properties.json', 'r') as f: seen = set(json.load(f))
     except: seen = set()
     
     all_props = []
     for url in SEARCH_URLS:
+        print(f"📡 Scraping: {url[:60]}...")
         all_props.extend(scrape_rightmove_page(url))
-        # Be stealthy: use random delays
-        time.sleep(random.uniform(5, 10))
+        # Use random delays to mimic human behavior
+        time.sleep(random.uniform(6, 12))
     
     new_count = 0
     for prop in all_props:
@@ -154,12 +157,12 @@ def main():
         if h_score >= 25:
             matches = find_matching_landlords(prop, landlords)
             if matches:
-                alert = f"🏠 <b>HMO OPPORTUNITY</b>\n\n📍 {prop['title']}\n💰 {prop['price']}\n🛏️ {prop['bedrooms']} Beds\n🔗 <a href='{prop['link']}'>View</a>\n\n<b>Match:</b> {matches[0]['landlord']}"
+                alert = f"🏠 <b>HMO OPPORTUNITY</b>\n\n📍 {prop['title']}\n💰 {prop['price']}\n🛏️ {prop['bedrooms']} Beds\n🔗 <a href='{prop['link']}'>View</a>\n\n<b>Top Match:</b> {matches[0]['landlord']}"
                 if send_telegram_alert(alert): new_count += 1
         seen.add(prop['id'])
     
     with open('seen_properties.json', 'w') as f: json.dump(list(seen), f)
-    print(f"✨ Found {new_count} new opportunities.")
+    print(f"✨ Complete. New opportunities found: {new_count}")
 
 if __name__ == "__main__":
     main()
